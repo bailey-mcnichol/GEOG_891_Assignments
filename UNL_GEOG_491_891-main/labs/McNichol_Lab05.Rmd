@@ -1,0 +1,291 @@
+---
+title: 'Lab 5 - Dynamic Mapping in Leaflet'
+author: "Bailey McNichol"
+date: "`r format(Sys.time(), '%Y %B %d')`"
+always_allow_html: yes
+output:
+  html_document: default
+---
+
+```{r include=TRUE, echo=TRUE, message=FALSE}
+# Load Libraries
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(tmap)
+library(stringr)
+library(spdep)
+library(ggplot2)
+library(GISTools)
+library(raster)
+library(grid)
+library(classInt)
+library(htmltools)
+```
+
+Task 1. From lab 2, task 2.3:
+Original task to be recreated using Leaflet: 
+Make a map of the counties, shading each county by the total cost of BMPs funded/implemented in that county. This will required you to join multiple datasets together
+Leaflet/other extras to add:
+• Mouse-over label the displays the total cost of BMPs funded in that county
+• Use an equal-interval classification method with 5 classes. Determine the breaks programmatically. 
+• Do NOT use the default color scheme
+
+#### Below, I load the county and best management practice (BMP) data for the new version of the map from Lab 2, Task 2.3.
+```{r include=TRUE, echo=TRUE, message=FALSE}
+# Load the data from Lab 2
+
+# Spatial data - counties
+counties <- sf::read_sf("../data/CBW/County_Boundaries.shp") %>% sf::st_make_valid()
+
+# Aspatial data - BMPs
+bmps <- read_csv("../data/CBW/BMPreport2016_landbmps.csv")
+```
+
+
+#### As I did in Lab 2, Task 2.3, I first trimmed and created a county FIPS code in the bmps data using str_sub(). Then, I grouped the bmps data by county, removed NA values for the Cost variable, and calculated the total cost of BMPs by county using summarise(), creating a new variable, totalCost, in a new tibble, BMPs. I then performed a left join by county on the counties and BMPs data sets. For the map, I first determined the five equal-interval classification breaks using the classIntervals() function. I assigned these breaks in a vector of bins, created a vector of five colors using viridis() to avoid default colors, and then used these to create a palette for the total BMP costs per county. For the actual map, I specified the map zoom around a lat/long in the middle of the Chesapeake Bay Watershed, read in the b/w basemap using addProviderTiles(), used addPolygons() to add in the county layer, color-coded by the equal-interval classes using ~pal(totalCost) to refer to the pre-made palette, added the mouse-over labels for total BMP cost per county, and finally added a legend with corresponding colors for total cost.
+```{r include=TRUE, echo=TRUE, message=FALSE, warning=FALSE}
+
+BMPs <- bmps %>% 
+     # Create County FIPS Codes for bmps data with str_sub()
+        mutate(., FIPS.trimmed = stringr::str_sub(GeographyName, 1, 5))  %>%
+     # Group the BMP data by county
+        group_by(FIPS.trimmed) %>%
+     # Remove NA values for Cost
+        drop_na(Cost) %>%
+     # Calculate the total cost of BMPs in that county
+        summarise(totalCost = sum(Cost))
+        
+# Join the bmps data with the counties, by county code
+county_bmp <- left_join(counties, BMPs, by = c("GEOID10" = "FIPS.trimmed"))
+
+# Determine equal-interval classification breaks
+classIntervals(county_bmp$totalCost, n = 5, style = "equal")
+
+# Create bins based on equal-interval cutoffs
+bins <- c(0, 32315311, 64630440, 96945570, 129260699, 161575828)
+
+# Set colors for the five classes
+col <- viridis::viridis(5)
+
+# Create palette using the colors and bins (classes)
+pal <- colorBin(col, domain = county_bmp$totalCost, bins = bins)
+
+# Plot counties
+leaflet(data = county_bmp) %>% 
+  # Specify zoom around lat/long in the middle of the Chesapeake Bay Watershed
+    setView(lng = -77.500846, lat = 39.735632, zoom = 5.4) %>%
+  # Set basemap to be black/white to easily see counties
+   addProviderTiles(providers$Stamen.Toner)  %>%
+  # Add county layer, color-coded by equal-int classes, with popup labels showing the total cost of funded BMPs per county
+    addPolygons(., fillColor = ~pal(totalCost),
+              color = "darkgrey",
+              weight = 1,
+              label = ~paste0("$ ",totalCost)) %>%
+  # Add legend showing the classes of funded BMPs
+    addLegend("bottomright", pal = pal, values = ~pal(totalCost),
+    title = "Cost of Funded BMPs",
+    labFormat = labelFormat(prefix = "$"),
+    opacity = 2)
+```
+
+
+Task 2. From lab 3, task Bonus #2:
+Original task to be recreated using Leaflet: plot a choropleth map of your dataset with a categorical color scheme, where the shading corresponds to the Moran plot (really, “LISA”) quadrants. Thus, your map will have four shades of color.
+Leaflet/other extras to add:
+• Add a pop-up window that displays the p-value (you’ll have to look at the moran.test() documenta- tion) when you click on that county with a mouse
+• Add a control to change between 3 different basemaps
+
+#### To create my revised map from Lab 3, Bonus #2, I first read in my data from the U.S. Four Corners (AZ, CO, NM, and UT), re-projected this to WGS84, made a contiguity-based neighborhood using rook relationships, and row-standardized the weights. Then, I used moran.plot() to extract the values and weights matrix for my variable of interest, the number of individuals under 5 years of age (DP0010002), and assigned this to an object, "dat". I think used the case_when() function (thanks for the recommendation - I love this!) to create four categories for the four quadrants (HH, HL, LH, LL), representing Local Indicators of Spatial Association (LISA), from the variables x (the original values) and wx (the spatially lagged values). Finally, I combined these extracted values and the original dataset for plotting.
+```{r}
+# Subsetted Four Corners Data from Lab 3 - AZ, CO, NM, and UT
+fourCorners <- sf::read_sf("../data/fourCorners.shp")
+
+# Re-project from NAD83 to WGS84
+fc.projected <- fourCorners %>% sf::st_transform(., "WGS84") %>% sf::st_make_valid()
+
+# Create a neighborhood with contiguity-based spatial neighbors, using a rook relationship (i.e., at least 2 boundary points)
+nbFC <- poly2nb(fc.projected, queen = FALSE)
+
+# Assign weight to each neighboring county, using row standardization (style = "W"), and allow for zero-length weight vectors for non-neighbors
+lwFC <- nb2listw(nbFC, style="W", zero.policy=TRUE)
+
+# Extract the values from the re-projected data and weights matrix - using the number of individuals <5 years of age (DP0010002)
+dat <- moran.plot(as.vector(scale(fc.projected$DP0010002)), lwFC,
+          labels=as.character(fc.projected$NAMELSAD10))
+
+## Convert the Moran I's to four categories with case_when
+moran.dat <- dat %>% 
+       mutate(LISA = case_when((x >= 0 & wx >= 0) ~ "HH",
+                                (x >= 0 & wx < 0) ~ "HL",
+                                 (x < 0 & wx >= 0) ~ "LH",
+                                        TRUE ~ "LL")) 
+
+# Combine categories/p-values (hat) with projected data
+moran.dat2 <- cbind(fc.projected, moran.dat)
+ 
+```
+
+#### I annotated the steps for creating the full map, but I will summarize the procedure here. I assigned names to the basemaps and created a color palette for the four LISA categories. I set the map view using the lat/long for the center of the four corners, and then added the three basemap options using addProviderTiles(). Then, I used addPolygons() to add the counties, color coded by LISA category, and imbedded a pop-up showing the p-value for each (the variable "hat" is the p-value). I created a corresponding legend for the LISA categories with addLegend(), and finally used addLayersControl() to allow for switching between baseGroups (i.e., the displayed basemap). 
+```{r message=FALSE, warning=FALSE}
+
+# Name the Base Maps
+Nat_Geo <- providers$Esri.NatGeoWorldMap
+Carto_DB <- providers$CartoDB.Positron
+
+# Set colors for the four LISA classes
+col.2 <- viridis::magma(4)
+
+# Create palette using the colors and categories
+pal <- colorFactor(col.2, levels = c("HH","HL","LH","LL"))
+
+# Plot counties
+leaflet(data = moran.dat2) %>% 
+  # Specify zoom around lat/long in the middle of the Four Corners
+    setView(lng = -109.067731, lat = 37.056297, zoom = 4) %>%
+  # Add three different basemap options
+    addProviderTiles(providers$Stamen.Toner, group = "Toner") %>%
+    addProviderTiles(providers$CartoDB.Positron, group = "Carto_DB") %>%
+    addProviderTiles(providers$Esri.NatGeoWorldMap, group = "Nat_Geo") %>%
+  # Add county layer, color-coded by LISA quadrants, with popup labels showing p-value for each county
+    addPolygons(., fillColor = ~pal(LISA),
+              color = "darkgrey", weight = 1,
+              fillOpacity = 0.5,
+              popup = ~paste0("p = ",hat)) %>%
+  # Add legend showing the four categories of LISA, for the number of individuals <5 years of age
+    addLegend(., "bottomright", pal = pal, 
+              values = ~LISA,
+    title = "LISA for No. Ind. <5 Years",
+    opacity = 2) %>%
+  # Control for changing between basemaps
+  addLayersControl(
+    baseGroups = c("Toner", "Carto_DB","Nat_Geo"),
+    options = layersControlOptions(collapsed = FALSE))
+
+```
+
+Task 3: From lab 4, task 2:
+Original task to be recreated using Leaflet: Make a second map of your choosing. You may choose any spatial extent, domain, or technique. I’m looking for creativity, good coding practices (including comments), and for you to demonstrate independent thinking. There are minor restrictions you must follow:
+1. It must include vector AND raster data in some manner
+2. It must include spatial data relating to a social process (e.g., political boundaries) AND spatial data relating to an environmental process (e.g., water resources)
+3. The map should “stand on its own” and communicate its purpose without additional text
+4. That’s it!
+Leaflet/other extras to add:
+• Add a control that turns on/off each layer
+• Since everyone’s maps are different, I can’t specify exactly what else you should add. But, find one thing cool, interesting, or applicable to YOUR map, and implement it.
+
+#### For my map from Lab 4, Task 2, I downloaded a 1:250,000 raster image file of New York City (NYC) County in New York State. I then found shapefiles including the NYC Community Districts (political boundaries), NYC parks, and NYC Community Health Survey Data, which comes from a city-wide survey estimating occurrence of a wide variety of chronic diseases and behavioral risk factors. Below, I reduce the resolution of the raster using aggregate() and a factor of 3, and then standardize the projections across layers.
+
+```{r include=TRUE, echo=TRUE, message=FALSE, warning=FALSE}
+
+###  Load the raster/shapefiles and standardize projections 
+# New York City County Raster
+nyc.rast <- raster::raster("../data/nyc250/nyc250.tif") 
+# Re-project NYC raster to Web Mercator (EPSG:3857) - got a weird error about the base tile map not matching the raster until I re-projected this
+nyc.ras <- projectRaster(nyc.rast, crs="+init=EPSG:3857")
+# Check resolution
+res(nyc.ras)
+# Aggregate from 13.8 x 13.9 resolution to 41.4 x 41.7 (factor = 3)
+nyc.ras.agr <- raster::aggregate(nyc.ras, fact=3)
+
+# New York City Community Districts
+nyc.dis <- sf::read_sf("../data/Community Districts/geo_export_264abbf3-0041-4b44-8618-583376125eb3.shp") 
+nyc.dist <- st_transform(nyc.dis, "WGS84")
+
+# New Yory City Parks
+nyc.park <- sf::read_sf("../data/Open Space (Parks)/geo_export_1a3abf2e-534d-4871-8173-c432dcb113f8.shp") 
+nyc.parks <- st_transform(nyc.park, "WGS84")
+
+# New Yory City Community Health Survey (CHS) Data
+nyc.ch <- sf::read_sf("../data/CHS_2009_DOHMH_2010B/CHS_2009_DOHMH_2010B.shp") 
+nyc.chs <- st_transform(nyc.ch, "WGS84")
+
+```
+
+#### I have annotated each step involved in creating my dynamic map below, but I will summarize briefly here. I created color palettes for each layer, assigning colors to ranges of values with the colorNumeric() and colorBin() functions. I created an overall customied map title, and assigned group names to facilitate being able to turn on/off each map layer. For the map, I first set bounding lat/longs, and then plotted the basic basemap with addTiles() and my NYC raster with addRasterImage(). Next, I used the addPolygons() function to map on the NYC Community districts and the depression rates by district, creating a pop-up label of the name of the borough each district is contained within (this was one of my "extras" I added to my map). I also used addPolygon to add the NYC parks, color-coded by their areas, and then used addLegend() to add in corresponding color-coded legends for the district depression rates and park areas. Finally, I used addControl() to add the figure title, addScaleBar() to add a dynamic scale bar (my other map "extra"), and then addLayersControl() to allow each layer to be turned on/off (refers to layers within overlayGroups). 
+```{r message=FALSE, warning=FALSE}
+
+# Create purple/blue color paletter for NYC raster  
+pal.ras <- colorNumeric("PuBu", values(nyc.ras.agr), na.color = "transparent") 
+
+# Set colors for the five classes
+col <- viridis::viridis(5)
+
+# Create palette using the colors and bins (classes)
+pal <- colorBin("Greens", domain = nyc.chs$depres2, bins = 5)
+
+# Determine quantile based classification breaks
+classIntervals(nyc.parks$shape_area, n = 4, style = "quantile")
+# Create bins
+park.bins <- c(0,50,100,1000,5000,10000,63000000)
+
+# Create palette using the colors and bins (classes)
+palPark <- colorBin("YlGnBu", domain = nyc.chs$depres2, bins = park.bins)
+
+# Make an overall map title
+my_title <- tags$p(tags$style("p {color: black; font-size:12px}"),
+            tags$b("Depression Rates and Park Locations in New York City Districts"))
+
+# Assign group names for turning on/off each layer
+NYC_Raster <- nyc.ras.agr
+Comm_Districts <- nyc.dist
+Depression_Rates <- nyc.chs$depres2
+NYC_Parks <- nyc.parks$shape_area
+ 
+# Plot NYC raster and shapefiles
+leaflet() %>% 
+  # Set bounds for lat/longs around perimeter of NYC
+      fitBounds(-74.3, 40.4, -72.9, 41.3) %>%
+  # Add basic basemap
+      addTiles() %>%
+  # Add the downsampled NYC raster 
+       addRasterImage(nyc.ras.agr, colors = pal.ras, opacity = 0.8,
+                      group = "NYC_Raster") %>%
+      #addRasterImage(nyc.ras.agr, colors = pal.ras, opacity = 0.8) %>%
+  # Add polygons of the NYC Community Districts
+      addPolygons(data = nyc.dist, fillColor = "gray",
+               color = "darkgrey", weight = 1.3,
+               group = "Comm_Districts") %>%
+  # Color-Code NYC Community Districts by rates of depression
+      addPolygons(data = nyc.chs, fillColor = ~pal(depres2),
+               fillOpacity = 0.5, group = "Depression_Rates",
+               popup = ~FIRST_BORO,
+               color = "darkgrey", weight = 1.3) %>%
+  # Add legend for rates of depression
+      addLegend(data = nyc.chs, "bottomright", pal = pal, 
+            values = ~pal(depres2),
+            title = "Percent Depressed in 2009",
+            labFormat = labelFormat(suffix = "%"),
+            opacity = 2) %>%
+  # Add polygons of the city parks, color-coded by area
+      addPolygons(data = nyc.parks, fillColor = ~palPark(shape_area),
+               fillOpacity = 0.5, group = "NYC_Parks",
+               color = "black", weight = 0.5) %>%
+  # Add legend for park areas
+      addLegend(data = nyc.parks, "bottomright", pal = palPark, 
+            values = ~palPark(shape_area),
+            title = "Park Area",
+            labFormat = labelFormat(suffix = "m2"),
+            opacity = 2) %>%
+  # Add overall plot title
+     addControl(my_title, position = "topleft") %>%
+  # Add scale bar in m
+     addScaleBar(position = "bottomleft") %>%
+  # Control for turning on/off each layer
+      addLayersControl(overlayGroups = c("NYC_Raster", "Comm_Districts",
+                      "Depression_Rates", "NYC_Parks"),
+         options = layersControlOptions(collapsed = FALSE))
+
+```
+
+
+Questions:
+1. Reflect on the labs from this semester. What did you learn? What did you like? What did you not like?
+
+#### I really enjoyed the labs overall! The first one was fairly easy for me, as it was mostly a review of R/GGplot, but I especially enjoyed all of the labs using spatial joins/analyses, as this was new for me and pushed me to become familiar with new packages/tools, with extremely useful applications. I think you did a really excellent job introducing us to the basic concepts in class, but structuring the labs in such a way where it wasn't repetition of the same thing in the lab assignments, and required some digging into the function documentation (and some googling) to accomplish the tasks. I feel like I now have proficient mapping skills with both static/interactive maps, which I had not learned before! I didn't necessarily dislike anything, but it might have been useful to spend some more time on using/manipulating rasters in R during class. This might mostly be due to the fact that I have limited experience working with spatial data, but for Lab 4, I struggled to find a raster of an appropriate size/resolution that I could use for the assignment, and then struggled for a while figuring out how to transform the CRS and resample to reduce the resolution so that the map didn't take a really long time to plot.
+
+2. Describe the “one thing” you chose to add to your map in Task 3 above. What did you do, and why is it applicable to your map?
+
+#### For my map, I added two small things. I wanted to experiment with whether you could add a pop-up to a polygon that showed a value for a different variable, and did so by adding a pop-up to designate the NYC Borough that each NYC community district belongs to. I also wanted to learn how to add a dynamic scale bar, as we had only previously done this in tmap(), and I did so using the addScaleBar() function. I also found a way to customize the plot title, creating an object before actually plotting (my_title) that specified font color, font size, and the title. The Borough labels are applicable because these are a much more familiar geographis unit of reference than the smaller community districts, so they are useful in discussing trends across broader areas of NYC. The scale bar is of course applicable for having a frame of reference of scale based on how zoomed out/in you are, and the title is helpful in getting the broader idea of what data are shown
+
+

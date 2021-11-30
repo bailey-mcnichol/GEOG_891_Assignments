@@ -49,10 +49,10 @@ m %>% addProviderTiles(providers$CartoDB.Positron) # muted colors
 m %>% addProviderTiles(providers$CartoDB.DarkMatter) # black with dark grey
 m %>% addProviderTiles(providers$Esri.NatGeoWorldMap) # NatGeo
 
-
 # Read in some data!
 # State parks shape file
 parks <- sf::read_sf("./data/State_Park_Locations.shp")
+glimpse(parks)
 # set up the map, zoom out a bit
 mp <- leaflet(data = parks) %>% setView(lng = -96.703090, lat = 40.81928, zoom = 10)
 # Plot it with the pop-ups/labels being the named the same as the parks
@@ -62,6 +62,7 @@ mp %>% addTiles() %>%
 
 # Add some lines
 streams <- sf::read_sf("./data/Streams_303_d_.shp")
+glimpse(streams)
 ms <- leaflet(data = streams) %>%
   setView(lng = -96.703090, lat = 40.81928, zoom = 10) %>%
   addTiles() %>%
@@ -73,8 +74,9 @@ ms
 # Read in municipal boundaries shape file
 bound <- sf::read_sf("./data/Municipal_Boundaries.shp")
 names(bound)
+glimpse(bound)
 
-# Multiple data layers
+ # Multiple data layers
 # do multiple layers by not passing the first "leaflet()" call a data argument
 m.both <- leaflet() %>% # no data here!
   setView(lng = -96.703090, lat = 40.81928, zoom = 10) %>%
@@ -88,6 +90,7 @@ m.both <- leaflet() %>% # no data here!
     
 m.both
 
+glimpse(parks)
 
 
 

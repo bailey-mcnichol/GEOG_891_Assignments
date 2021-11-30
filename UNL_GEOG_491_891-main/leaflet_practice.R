@@ -11,8 +11,8 @@ stations <- sf::read_sf("./data/Non-Tidal_Water_Quality_Monitoring_Stations_in_t
 glimpse(dams)
 glimpse(stations)
 
-addMarkers(data = parks, popup = ~AreaName, # Add line data here
-           label = ~AreaName) %>% 
+# addMarkers(data = parks, popup = ~AreaName, # Add line data here
+#            label = ~AreaName) %>% 
   
   
 brewer.pal(n = 6, name = 'Dark2')
@@ -27,6 +27,10 @@ Base_Map <- providers$Esri.NatGeoWorldMap
 Station_Name <- stations$STATION_NA
 Dam_Removal <- dams$DamRemoval
 
+## Make water icon
+water <- iconList(drop = makeIcon("../data/water.drop.png", 10,10))
+
+## Map
 leaflet() %>% 
       setView(lng = -77.678505, lat = 39.801475, zoom = 7) %>%
       addProviderTiles(Base_Map, group = "Base_Map") %>%
@@ -39,12 +43,13 @@ leaflet() %>%
                        weight = 0) %>%
       addCircleMarkers(data = dams, group = "Dam_Removal",
                        color = ~pal(DamRemoval)) %>%
+      #addMarkers(data = coord, lat = Y, lng = X,  icon = water)
   addLayersControl(
     baseGroups = c("Base_Map", "Toner"),
     overlayGroups = c("Station_Name", "Dam_Removal"),
     options = layersControlOptions(collapsed = FALSE))
                
-
+names(dams)
                  
-  
+
   
